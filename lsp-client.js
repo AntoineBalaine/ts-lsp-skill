@@ -380,11 +380,29 @@ class TypeScriptLSPClient {
 	}
 
 	/**
-	 * Stop the TypeScript server
+	 * Stop the TypeScript server gracefully
 	 */
-	stop() {
+	async stop() {
 		if (this.server) {
-			this.server.kill();
+			try {
+				// Try to send exit command first for graceful shutdown
+				if (!this.server.killed) {
+					await this.sendRequest("exit", {});
+					// Give it a moment to exit gracefully
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				}
+			} catch (error) {
+				// Server might already be gone, that's ok
+			}
+
+			// If still running, force kill
+			if (!this.server.killed) {
+				this.server.kill();
+			}
+
+			// Clean up event listeners
+			this.server.removeAllListeners();
+			this.server = null;
 		}
 	}
 }
@@ -396,10 +414,10 @@ function parseArgs(args) {
 	const result = { command: args[0], flags: {} };
 	for (let i = 1; i < args.length; i++) {
 		const arg = args[i];
-		if (arg.startsWith('--')) {
-			const key = arg.replace(/^--/, '');
+		if (arg.startsWith("--")) {
+			const key = arg.replace(/^--/, "");
 			// Check if next arg exists and doesn't start with --
-			if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
+			if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
 				result[key] = args[i + 1];
 				i++; // Skip next arg since we consumed it
 			} else {
@@ -429,8 +447,8 @@ function applyChanges(changes) {
 	// Apply changes to each file
 	for (const [filePath, fileChangeList] of fileChanges) {
 		// Read file content
-		const content = fs.readFileSync(filePath, 'utf-8');
-		const lines = content.split('\n');
+		const content = fs.readFileSync(filePath, "utf-8");
+		const lines = content.split("\n");
 
 		// Sort changes in reverse order (bottom to top) to preserve positions
 		const sortedChanges = fileChangeList.sort((a, b) => {
@@ -463,10 +481,10 @@ function applyChanges(changes) {
 		}
 
 		// Write back to file
-		fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
+		fs.writeFileSync(filePath, lines.join("\n"), "utf-8");
 		appliedFiles.push({
 			file: filePath,
-			changesApplied: fileChangeList.length
+			changesApplied: fileChangeList.length,
 		});
 	}
 
@@ -487,6 +505,15 @@ async function main() {
 
 	const client = new TypeScriptLSPClient();
 
+	// Ensure cleanup on signal interrupts
+	const cleanup = async () => {
+		await client.stop();
+		process.exit(0);
+	};
+
+	process.on("SIGINT", cleanup);
+	process.on("SIGTERM", cleanup);
+
 	try {
 		await client.start();
 
@@ -506,11 +533,17 @@ async function main() {
 				// Apply changes if --apply flag is present
 				if (args.flags.apply) {
 					const appliedFiles = applyChanges(result.changes);
-					console.log(JSON.stringify({
-						...result,
-						applied: true,
-						filesModified: appliedFiles
-					}, null, 2));
+					console.log(
+						JSON.stringify(
+							{
+								...result,
+								applied: true,
+								filesModified: appliedFiles,
+							},
+							null,
+							2,
+						),
+					);
 				} else {
 					console.log(JSON.stringify(result, null, 2));
 				}
@@ -551,11 +584,17 @@ async function main() {
 					// Apply changes if --apply flag is present
 					if (args.flags.apply) {
 						const appliedFiles = applyChanges(result.changes);
-						console.log(JSON.stringify({
-							...result,
-							applied: true,
-							filesModified: appliedFiles
-						}, null, 2));
+						console.log(
+							JSON.stringify(
+								{
+									...result,
+									applied: true,
+									filesModified: appliedFiles,
+								},
+								null,
+								2,
+							),
+						);
 					} else {
 						console.log(JSON.stringify(result, null, 2));
 					}
@@ -587,13 +626,7 @@ async function main() {
 
 				// If no specific fix-id, show available code actions
 				if (!args["fix-id"]) {
-					const actions = await client.getCodeActions(
-						args.file,
-						line,
-						column,
-						endLine,
-						endColumn,
-					);
+					const actions = await client.getCodeActions(args.file, line, column, endLine, endColumn);
 					console.log(JSON.stringify({ available: actions }, null, 2));
 				} else {
 					const result = await client.getCodeActionEdits(
@@ -608,11 +641,17 @@ async function main() {
 					// Apply changes if --apply flag is present
 					if (args.flags.apply) {
 						const appliedFiles = applyChanges(result.changes);
-						console.log(JSON.stringify({
-							...result,
-							applied: true,
-							filesModified: appliedFiles
-						}, null, 2));
+						console.log(
+							JSON.stringify(
+								{
+									...result,
+									applied: true,
+									filesModified: appliedFiles,
+								},
+								null,
+								2,
+							),
+						);
 					} else {
 						console.log(JSON.stringify(result, null, 2));
 					}
@@ -642,7 +681,7 @@ async function main() {
 		console.error(JSON.stringify({ success: false, error: error.message }, null, 2));
 		process.exit(1);
 	} finally {
-		client.stop();
+		await client.stop();
 	}
 }
 
