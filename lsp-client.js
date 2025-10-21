@@ -384,21 +384,42 @@ class TypeScriptLSPClient {
 	 */
 	async stop() {
 		if (this.server) {
+			// Create a promise that resolves when the server actually closes
+			const closePromise = new Promise((resolve) => {
+				this.server.once('close', resolve);
+			});
+
 			try {
 				// Try to send exit command first for graceful shutdown
+				// Note: Don't await this - tsserver exits without sending a response
 				if (!this.server.killed) {
-					await this.sendRequest("exit", {});
-					// Give it a moment to exit gracefully
-					await new Promise((resolve) => setTimeout(resolve, 100));
+					const exitRequest = {
+						seq: ++this.seq,
+						type: "request",
+						command: "exit",
+						arguments: {},
+					};
+					this.server.stdin.write(JSON.stringify(exitRequest) + "\n");
 				}
 			} catch (error) {
 				// Server might already be gone, that's ok
 			}
 
+			// Close stdin to signal we're done sending commands
+			if (this.server.stdin && !this.server.stdin.destroyed) {
+				this.server.stdin.end();
+			}
+
+			// Wait a moment for graceful shutdown
+			await new Promise(resolve => setTimeout(resolve, 100));
+
 			// If still running, force kill
 			if (!this.server.killed) {
 				this.server.kill();
 			}
+
+			// Wait for the server to actually close
+			await closePromise;
 
 			// Clean up event listeners
 			this.server.removeAllListeners();
@@ -687,10 +708,14 @@ async function main() {
 
 // Run if executed directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-	main().catch((error) => {
-		console.error(error);
-		process.exit(1);
-	});
+	main()
+		.then(() => {
+			process.exit(0);
+		})
+		.catch((error) => {
+			console.error(error);
+			process.exit(1);
+		});
 }
 
 export { TypeScriptLSPClient };
