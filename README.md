@@ -12,7 +12,7 @@ This skill enables Claude Code to perform safe, semantic-aware TypeScript refact
 
 ## Installation
 
-The skill is automatically available when placed in `.claude/skills/ts-lsp-refactor/`. No additional installation is required, but you need:
+The skill is automatically available when placed in `.claude/skills/ts-lsp/`. No additional installation is required, but you need:
 
 - Node.js installed
 - TypeScript in your project (`npm install typescript`) or globally (`npm install -g typescript`)
@@ -35,19 +35,15 @@ Claude Code will automatically use this skill when you request TypeScript refact
 You can test the LSP client directly:
 
 ```bash
-# Check if a file is valid TypeScript
-node .claude/skills/ts-lsp-refactor/lsp-client.js check \
-  --file src/index.ts
-
 # Preview rename locations (doesn't modify files)
-node .claude/skills/ts-lsp-refactor/lsp-client.js rename \
+node .claude/skills/ts-lsp/lsp-client.js rename \
   --file src/index.ts \
   --line 10 \
   --column 5 \
   --new-name "newFunctionName"
 
 # Apply rename immediately (modifies files)
-node .claude/skills/ts-lsp-refactor/lsp-client.js rename \
+node .claude/skills/ts-lsp/lsp-client.js rename \
   --file src/index.ts \
   --line 10 \
   --column 5 \
@@ -55,7 +51,7 @@ node .claude/skills/ts-lsp-refactor/lsp-client.js rename \
   --apply
 
 # Get available refactorings for a code range
-node .claude/skills/ts-lsp-refactor/lsp-client.js refactor \
+node .claude/skills/ts-lsp/lsp-client.js refactor \
   --file src/index.ts \
   --start-line 15 \
   --start-column 0 \
@@ -63,7 +59,7 @@ node .claude/skills/ts-lsp-refactor/lsp-client.js refactor \
   --end-column 0
 
 # Preview a specific refactoring (doesn't modify files)
-node .claude/skills/ts-lsp-refactor/lsp-client.js refactor \
+node .claude/skills/ts-lsp  /lsp-client.js refactor \
   --file src/index.ts \
   --start-line 15 \
   --start-column 0 \
@@ -73,7 +69,7 @@ node .claude/skills/ts-lsp-refactor/lsp-client.js refactor \
   --action-name "function_scope_0"
 
 # Apply a specific refactoring immediately (modifies files)
-node .claude/skills/ts-lsp-refactor/lsp-client.js refactor \
+node .claude/skills/ts-lsp/lsp-client.js refactor \
   --file src/index.ts \
   --start-line 15 \
   --start-column 0 \
@@ -84,19 +80,19 @@ node .claude/skills/ts-lsp-refactor/lsp-client.js refactor \
   --apply
 
 # Find all references to a symbol
-node .claude/skills/ts-lsp-refactor/lsp-client.js references \
+node .claude/skills/ts-lsp/lsp-client.js references \
   --file src/index.ts \
   --line 10 \
   --column 5
 
 # Get available code actions/quick fixes
-node .claude/skills/ts-lsp-refactor/lsp-client.js code-actions \
+node .claude/skills/ts-lsp/lsp-client.js code-actions \
   --file src/index.ts \
   --line 10 \
   --column 5
 
 # Apply a specific code action/quick fix
-node .claude/skills/ts-lsp-refactor/lsp-client.js code-actions \
+node .claude/skills/ts-lsp/lsp-client.js code-actions \
   --file src/index.ts \
   --line 10 \
   --column 5 \
@@ -106,11 +102,25 @@ node .claude/skills/ts-lsp-refactor/lsp-client.js code-actions \
 
 ## How It Works
 
-1. **TypeScript Server**: The skill starts a TypeScript language server process (tsserver)
-2. **LSP Protocol**: Communicates with tsserver using its JSON protocol
-3. **Semantic Analysis**: TypeScript analyzes your code to understand symbols and their relationships
-4. **Safe Refactoring**: Returns all locations where changes need to be made
-5. **Application**: Claude applies the changes using the Edit tool
+This skill uses a **daemon-based architecture** for optimal performance:
+
+1. **First Call**: Automatically starts a background daemon that manages `tsserver` (~2-3 seconds)
+2. **Daemon Process**: Runs in the background, handling multiple requests efficiently
+3. **Subsequent Calls**: Connect to the running daemon for near-instant responses (~40-50ms)
+4. **Auto-Cleanup**: The daemon automatically shuts down after 2 minutes of inactivity
+5. **Per-Project**: Each project gets its own daemon (based on working directory hash)
+
+**Performance**:
+- First refactoring: ~2-3 seconds (daemon startup + tsserver initialization)
+- Subsequent refactorings: ~40-50ms (just socket communication)
+- No manual management needed - the daemon handles itself!
+
+**Technical Flow**:
+1. Client checks if daemon is running (via Unix socket)
+2. If not running, spawns daemon as detached background process
+3. Sends refactoring request via JSON over socket
+4. Daemon uses TypeScript's LSP to analyze code semantically
+5. Returns changes to client, which applies them if `--apply` is used
 
 ## Output Format
 
@@ -187,15 +197,27 @@ The refactoring cannot be applied at the specified location. Try:
          │ (runs)
          ▼
 ┌─────────────────┐
-│  lsp-client.js  │  ← Node.js LSP client
+│  lsp-client.js  │  ← Lightweight client
+└────────┬────────┘
+         │
+         │ (JSON via Unix socket)
+         ▼
+┌─────────────────┐
+│  lsp-daemon.js  │  ← Background daemon (auto-starts, auto-stops)
 └────────┬────────┘
          │
          │ (JSON protocol via stdio)
          ▼
 ┌─────────────────┐
-│    tsserver     │  ← TypeScript language server
+│    tsserver     │  ← TypeScript language server (kept warm)
 └─────────────────┘
 ```
+
+**Key Components**:
+- **lsp-client.js**: Fast client that connects to daemon via Unix socket
+- **lsp-daemon.js**: Background process managing tsserver with 2-min inactivity timeout
+- **Unix socket**: `/tmp/ts-lsp-daemon-{hash}.sock` for IPC
+- **tsserver**: Kept running between requests for speed
 
 ## Examples
 

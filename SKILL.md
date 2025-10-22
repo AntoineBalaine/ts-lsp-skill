@@ -29,23 +29,16 @@ This skill provides interactive TypeScript code refactoring capabilities using t
 
 ## Workflow
 
-### Starting the LSP Server
+### How the LSP System Works
 
-Before performing any refactoring, start the TypeScript LSP server:
+This skill uses a **daemon-based architecture** for optimal performance:
 
-```bash
-# Navigate to the project root
-cd /path/to/project
+- **First call**: Automatically starts a background daemon that manages `tsserver` (~2-3 seconds)
+- **Subsequent calls**: Connect to the running daemon for near-instant responses (~40-50ms)
+- **Auto-cleanup**: The daemon automatically shuts down after 2 minutes of inactivity
+- **Per-project**: Each project gets its own daemon (based on working directory)
 
-# Start the TypeScript language server using the helper script
-node .claude/skills/ts-lsp-refactor/lsp-client.js
-```
-
-The helper script will:
-1. Locate the TypeScript installation
-2. Start the `tsserver` process
-3. Initialize the server with the current project
-4. Keep a persistent connection for refactoring operations
+**You don't need to manually start or stop anything** - just use the commands and the daemon handles itself!
 
 ### Rename Symbol Refactoring
 
@@ -54,19 +47,21 @@ When the user wants to rename a symbol:
 1. **Identify the symbol location**:
    - Ask the user which symbol to rename if not specified
    - Use Grep to find the symbol definition
+   - **ALWAYS use Read tool** to see the exact file content at that line
+   - Count column position carefully (tabs = 1 character, not 4 spaces!)
    - Determine the file path and line/column position
 
 2. **Use the LSP rename operation**:
    ```bash
    # Preview changes (returns JSON without modifying files)
-   node .claude/skills/ts-lsp-refactor/lsp-client.js rename \
+   node .claude/skills/ts-lsp/lsp-client.js rename \
      --file "/path/to/file.ts" \
      --line 10 \
      --column 5 \
      --new-name "newSymbolName"
 
    # Apply changes immediately (modifies files directly)
-   node .claude/skills/ts-lsp-refactor/lsp-client.js rename \
+   node .claude/skills/ts-lsp/lsp-client.js rename \
      --file "/path/to/file.ts" \
      --line 10 \
      --column 5 \
@@ -85,18 +80,62 @@ When the user wants to rename a symbol:
    - This is safer and more atomic than using Edit tool manually
    - The LSP ensures all related symbols are renamed consistently
 
+### ⚠️ CRITICAL: Handling Tabs and Character Offsets
+
+**Tab characters cause offset calculation issues!** The LSP expects character offsets (where tab = 1 character), but when counting visually, tabs may appear as 4 or 8 spaces.
+
+**IMPORTANT RULES**:
+
+1. **Use Read tool output for column positions**: When you read a file with the Read tool, the line numbers and content are shown. Count characters EXACTLY as they appear in the file, where:
+   - Tab character = 1 character (not 4 spaces)
+   - Each regular character = 1 character
+
+2. **Never guess column positions**: Always use Read tool to see the exact file content, then count characters carefully:
+   ```
+   Example from Read tool output:
+   45→	async function getData(param: string) {
+
+   To rename "getData":
+   - Line: 45
+   - Column: Count from start: [tab]=1, [a]=2, [s]=3, [y]=4, [n]=5, [c]=6, [space]=7,
+             [f]=8, [u]=9, [n]=10, [c]=11, [t]=12, [i]=13, [o]=14, [n]=15, [space]=16, [g]=17
+   - Column for 'g' in 'getData' = 17 (0-indexed: 16)
+   ```
+
+3. **When in doubt about tabs**:
+   - Read the file with Read tool
+   - Look at the actual characters between the start of line and your target symbol
+   - Count each tab as exactly 1 character
+   - Use 0-based indexing for column (first character is column 0)
+
+4. **If LSP fails with "Cannot rename"**:
+   - The column offset is likely wrong due to tabs
+   - Re-read the file carefully
+   - Try column positions around the expected location (±1 or ±2)
+   - Or ask the user to confirm the exact position
+
+**Example of correct counting with tabs**:
+```typescript
+// Line has one tab at start:
+	function test() {
+//  ↑ column 0 is the tab
+//   ↑ column 1 is 'f'
+//          ↑ column 9 is 't' in 'test'
+```
+
 ### Extract Function/Method Refactoring
 
 When the user wants to extract code:
 
 1. **Identify the code range**:
    - Ask the user to specify the file and line range
+   - **Use Read tool** to see the exact file content and count column positions (tabs = 1 char!)
    - Or use context from recent edits/reads
 
 2. **Get available refactorings**:
    ```bash
    # First, see what refactorings are available
-   node .claude/skills/ts-lsp-refactor/lsp-client.js refactor \
+   node .claude/skills/ts-lsp/lsp-client.js refactor \
      --file "/path/to/file.ts" \
      --start-line 15 \
      --start-column 0 \
@@ -108,7 +147,7 @@ When the user wants to extract code:
 3. **Apply the refactoring**:
    ```bash
    # Preview changes (returns JSON without modifying files)
-   node .claude/skills/ts-lsp-refactor/lsp-client.js refactor \
+   node .claude/skills/ts-lsp/lsp-client.js refactor \
      --file "/path/to/file.ts" \
      --start-line 15 \
      --start-column 0 \
@@ -118,7 +157,7 @@ When the user wants to extract code:
      --action-name "function_scope_1"
 
    # Apply changes immediately (modifies files directly)
-   node .claude/skills/ts-lsp-refactor/lsp-client.js refactor \
+   node .claude/skills/ts-lsp/lsp-client.js refactor \
      --file "/path/to/file.ts" \
      --start-line 15 \
      --start-column 0 \
@@ -140,11 +179,12 @@ When the user wants to see where a symbol is used:
 
 1. **Identify the symbol**:
    - Find the symbol definition using Grep or ask the user
+   - **Use Read tool** to verify exact position (mind the tabs = 1 character!)
    - Determine the file, line, and column position
 
 2. **Use the LSP references operation**:
    ```bash
-   node .claude/skills/ts-lsp-refactor/lsp-client.js references \
+   node .claude/skills/ts-lsp/lsp-client.js references \
      --file "/path/to/file.ts" \
      --line 10 \
      --column 5
@@ -162,12 +202,13 @@ When there are TypeScript errors that need fixing:
 
 1. **Identify the error location**:
    - Use TypeScript diagnostics or user-reported error location
+   - **Use Read tool** to verify exact position (count tabs as 1 character!)
    - Note the file, line, and column
 
 2. **Get available quick fixes**:
    ```bash
    # See what quick fixes are available
-   node .claude/skills/ts-lsp-refactor/lsp-client.js code-actions \
+   node .claude/skills/ts-lsp/lsp-client.js code-actions \
      --file "/path/to/file.ts" \
      --line 10 \
      --column 5
@@ -176,7 +217,7 @@ When there are TypeScript errors that need fixing:
 3. **Apply a specific fix**:
    ```bash
    # Apply a specific fix with --apply flag
-   node .claude/skills/ts-lsp-refactor/lsp-client.js code-actions \
+   node .claude/skills/ts-lsp/lsp-client.js code-actions \
      --file "/path/to/file.ts" \
      --line 10 \
      --column 5 \
@@ -192,26 +233,35 @@ When there are TypeScript errors that need fixing:
 - If `tsconfig.json` is missing, suggest creating one or running in a TypeScript project
 - If the LSP server crashes, restart it automatically
 - If a refactoring is not available at the given location, explain why and suggest alternatives
+- **If "Cannot rename" or similar errors occur**: Most likely the column position is wrong due to tabs. Re-read the file with Read tool and recount characters where tab = 1 character
 
 ## Best Practices
 
-1. **Always confirm before large refactorings**: If a rename affects 10+ files, show a summary and ask for confirmation
-2. **Validate TypeScript compilation**: After refactoring, run `tsc --noEmit` to ensure no type errors were introduced
-3. **Use LSP for accuracy**: Always prefer LSP operations over manual find-replace to avoid breaking code
-4. **Show context**: When presenting refactoring options, show the relevant code snippet so the user understands the change
+1. **⚠️ ALWAYS use Read tool for accurate column positions**: Tab characters count as 1 character in LSP offsets, not 4 spaces. Never guess positions - always read the file and count characters exactly, where tab = 1 character.
+2. **Always confirm before large refactorings**: If a rename affects 10+ files, show a summary and ask for confirmation
+3. **Validate TypeScript compilation**: After refactoring, run `tsc --noEmit` to ensure no type errors were introduced
+4. **Use LSP for accuracy**: Always prefer LSP operations over manual find-replace to avoid breaking code
+5. **Show context**: When presenting refactoring options, show the relevant code snippet so the user understands the change
 
 ## Example Interactions
 
 **User**: "Rename the `getData` function to `fetchUserData`"
 
 **Skill Response**:
-1. Search for `getData` function definition
-2. Use LSP rename with --apply flag
-3. Show: "Renamed `getData` to `fetchUserData` in 5 files (12 references). Files modified:
+1. Use Grep to find `getData` function definition
+2. **Read the file with Read tool** to see the exact line and count column position (accounting for tabs!)
+3. Count characters carefully: If line is `[tab]function getData()` then:
+   - Position 0 = tab
+   - Position 1-8 = "function"
+   - Position 9 = space
+   - Position 10 = 'g' (start of getData)
+   - So use column=10 for the LSP command
+4. Use LSP rename with --apply flag
+5. Show: "Renamed `getData` to `fetchUserData` in 5 files (12 references). Files modified:
    - src/api/data.ts (1 change)
    - src/services/user.ts (3 changes)
    - src/utils/fetch.ts (8 changes)"
-4. Confirm: "Run `npm run check-types` to verify."
+6. Confirm: "Run `npm run check-types` to verify."
 
 **User**: "Extract lines 45-60 in src/utils.ts into a helper function"
 
