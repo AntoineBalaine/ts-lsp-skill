@@ -19,7 +19,8 @@ This skill provides interactive TypeScript code refactoring capabilities using t
 2. **Extract Functions/Methods**: Extract selected code into reusable functions or methods
 3. **Find All References**: Locate all usages of a symbol across the codebase
 4. **Code Actions/Quick Fixes**: Apply TypeScript quick fixes for errors and warnings
-5. **Other Refactorings**: Access additional LSP-powered refactorings as available
+5. **Move to File**: Move a function, class, or other symbol to a different file, automatically updating all imports
+6. **Other Refactorings**: Access additional LSP-powered refactorings as available
 
 ## Prerequisites
 
@@ -227,6 +228,55 @@ When there are TypeScript errors that need fixing:
 
 4. **Note**: Code actions only appear when there are actual TypeScript errors/warnings at the specified location
 
+### Move to File
+
+When the user wants to move a function, class, or other symbol to a different file:
+
+1. **Identify the symbol location**:
+   - Ask the user which symbol to move if not specified
+   - Use Grep to find the symbol definition
+   - **Use Read tool** to verify exact position (count tabs as 1 character!)
+   - Determine the file, line, and column position
+
+2. **Determine the target file**:
+   - Ask the user where they want to move the symbol
+   - The target file can be an existing file or a new file path
+   - Use absolute paths for the target file
+
+3. **Use the LSP move-to-file operation**:
+   ```bash
+   # Preview changes (returns JSON without modifying files)
+   node .claude/skills/ts-lsp/lsp-client.js move-to-file \
+     --file "/path/to/source.ts" \
+     --line 10 \
+     --column 5 \
+     --target-file "/path/to/destination.ts"
+
+   # Apply changes immediately (modifies files directly)
+   node .claude/skills/ts-lsp/lsp-client.js move-to-file \
+     --file "/path/to/source.ts" \
+     --line 10 \
+     --column 5 \
+     --target-file "/path/to/destination.ts" \
+     --apply
+   ```
+
+4. **What happens when you move a symbol**:
+   - The symbol (function, class, interface, etc.) is removed from the source file
+   - The symbol is added to the target file (created if it doesn't exist)
+   - All imports across the codebase are automatically updated
+   - Export statements are added/modified as needed
+
+5. **Recommended approach**:
+   - Position the cursor on the symbol name (function name, class name, etc.)
+   - Preview the changes first without `--apply` for large refactorings
+   - Use `--apply` flag to apply changes atomically
+
+6. **Limitations**:
+   - The symbol must be at the top level (not nested inside another function/class)
+   - The "Move to file" refactoring must be available at the cursor position
+   - If the refactoring is not available, the command will return the list of available refactorings
+
 ## Error Handling
 
 - If TypeScript is not installed, inform the user and suggest: `npm install typescript`
@@ -272,6 +322,28 @@ When there are TypeScript errors that need fixing:
 4. Use the appropriate refactoring with --apply flag
 5. Confirm: "Extracted to new function. The original code now calls this function. Files modified:
    - src/utils.ts (1 change)"
+
+**User**: "Move the `processData` function from src/utils.ts to src/data/processor.ts"
+
+**Skill Response**:
+1. Use Grep to find `processData` function definition in src/utils.ts
+2. **Read the file with Read tool** to verify the exact line and count column position (accounting for tabs!)
+3. Count characters to find the start of `processData` identifier
+4. Use LSP move-to-file with --apply flag:
+   ```bash
+   node .claude/skills/ts-lsp/lsp-client.js move-to-file \
+     --file "src/utils.ts" \
+     --line 25 \
+     --column 16 \
+     --target-file "src/data/processor.ts" \
+     --apply
+   ```
+5. Show: "Moved `processData` to src/data/processor.ts. Files modified:
+   - src/utils.ts (function removed, export updated)
+   - src/data/processor.ts (function added)
+   - src/services/handler.ts (import updated)
+   - src/api/endpoint.ts (import updated)"
+6. Confirm: "Run `npm run check-types` to verify all imports are correct."
 
 ## Notes
 

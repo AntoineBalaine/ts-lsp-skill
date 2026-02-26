@@ -11,6 +11,7 @@
  *   node lsp-client.js refactor --file <path> --start-line <n> --start-column <n> --end-line <n> --end-column <n> --refactor-type <type>
  *   node lsp-client.js references --file <path> --line <n> --column <n>
  *   node lsp-client.js code-actions --file <path> --line <n> --column <n>
+ *   node lsp-client.js move-to-file --file <path> --line <n> --column <n> --target-file <path>
  */
 
 import { spawn } from "child_process";
@@ -311,7 +312,7 @@ async function main() {
 
 	if (!args.command) {
 		console.error("Usage: node lsp-client.js <command> [options]");
-		console.error("Commands: rename, refactor, code-actions, references");
+		console.error("Commands: rename, refactor, code-actions, references, move-to-file");
 		process.exit(1);
 	}
 
@@ -388,6 +389,23 @@ async function main() {
 					endLine: parseInt(args["end-line"] || line),
 					endColumn: parseInt(args["end-column"] || column),
 					fixId: args["fix-id"],
+				};
+				break;
+			}
+
+			case "move-to-file": {
+				if (!args.file || !args.line || !args.column || !args["target-file"]) {
+					throw new Error("Missing required arguments: --file --line --column --target-file");
+				}
+
+				request = {
+					command: "move-to-file",
+					file: args.file,
+					line: parseInt(args.line),
+					column: parseInt(args.column),
+					endLine: parseInt(args["end-line"] || args.line),
+					endColumn: parseInt(args["end-column"] || args.column),
+					targetFile: args["target-file"],
 				};
 				break;
 			}

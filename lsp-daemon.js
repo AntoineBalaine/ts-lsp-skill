@@ -204,6 +204,9 @@ class TypeScriptLSPDaemon {
 				case "code-actions":
 					result = await this.handleCodeActions(request);
 					break;
+				case "move-to-file":
+					result = await this.handleMoveToFile(request);
+					break;
 				default:
 					throw new Error(`Unknown command: ${request.command}`);
 			}
@@ -399,6 +402,98 @@ class TypeScriptLSPDaemon {
 		}
 
 		return { changes };
+	}
+
+	/**
+	 * Handle move-to-file request
+	 *
+	 * This is an interactive refactoring that moves a symbol (function, class, etc.) to a different file.
+	 * The targetFile parameter specifies where the symbol should be moved.
+	 */
+	async handleMoveToFile(request) {
+		const { file, line, column, endLine, endColumn, targetFile } = request;
+		const absolutePath = await this.openFile(file);
+		const absoluteTargetPath = path.resolve(targetFile);
+
+		// First, check if "Move to file" refactoring is available at this location
+		const applicableResponse = await this.sendRequest("getApplicableRefactors", {
+			file: absolutePath,
+			startLine: line,
+			startOffset: column + 1,
+			endLine: endLine || line,
+			endOffset: (endColumn || column) + 1,
+		});
+
+		const availableRefactors = applicableResponse.body || [];
+
+		// Find the "Move to file" refactor
+		let moveToFileRefactor = null;
+		let moveToFileAction = null;
+
+		for (const refactor of availableRefactors) {
+			for (const action of refactor.actions || []) {
+				// The action kind for move-to-file is "refactor.move.file" or the name contains "Move to file"
+				if (action.kind === "refactor.move.file" ||
+				    action.name?.toLowerCase().includes("move to file") ||
+				    refactor.name?.toLowerCase().includes("move to file")) {
+					moveToFileRefactor = refactor.name;
+					moveToFileAction = action.name;
+					break;
+				}
+			}
+			if (moveToFileRefactor) break;
+		}
+
+		if (!moveToFileRefactor || !moveToFileAction) {
+			// Return available refactors so the user can see what's possible
+			return {
+				error: "Move to file refactoring is not available at this location",
+				available: availableRefactors,
+			};
+		}
+
+		// Get the edits for the move-to-file refactoring with the target file
+		const response = await this.sendRequest("getEditsForRefactor", {
+			file: absolutePath,
+			startLine: line,
+			startOffset: column + 1,
+			endLine: endLine || line,
+			endOffset: (endColumn || column) + 1,
+			refactor: moveToFileRefactor,
+			action: moveToFileAction,
+			interactiveRefactorArguments: {
+				targetFile: absoluteTargetPath,
+			},
+		});
+
+		if (!response.body) {
+			// Check if there's a notApplicableReason
+			if (response.body?.notApplicableReason) {
+				throw new Error(`Cannot move to file: ${response.body.notApplicableReason}`);
+			}
+			throw new Error("No refactoring edits available for move to file");
+		}
+
+		const changes = [];
+		for (const edit of response.body.edits) {
+			for (const change of edit.textChanges) {
+				changes.push({
+					file: edit.fileName,
+					line: change.start.line,
+					column: change.start.offset - 1,
+					endLine: change.end.line,
+					endColumn: change.end.offset - 1,
+					newText: change.newText,
+				});
+			}
+		}
+
+		return {
+			refactorName: moveToFileRefactor,
+			actionName: moveToFileAction,
+			targetFile: absoluteTargetPath,
+			changes,
+		};
 	}
 
 	/**
