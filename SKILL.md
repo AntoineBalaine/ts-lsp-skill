@@ -1,5 +1,5 @@
 ---
-name: TypeScript LSP Refactoring
+name: ts-lsp
 description: Use TypeScript Language Server Protocol to perform safe, accurate code refactoring operations including renaming symbols, extracting functions/methods, finding all references, and applying quick fixes. Invoke this skill when the user asks to rename TypeScript variables/functions/classes, extract code into functions, find where a symbol is used, fix TypeScript errors, or perform other TypeScript refactoring tasks.
 allowed-tools:
   - Read
