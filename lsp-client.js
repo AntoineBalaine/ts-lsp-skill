@@ -12,6 +12,7 @@
  *   node lsp-client.js references --file <path> --line <n> --column <n>
  *   node lsp-client.js code-actions --file <path> --line <n> --column <n>
  *   node lsp-client.js move-to-file --file <path> --line <n> --column <n> --target-file <path>
+ *   node lsp-client.js symbols --file <path> [--top-level-only]
  */
 
 import { spawn } from "child_process";
@@ -312,7 +313,7 @@ async function main() {
 
 	if (!args.command) {
 		console.error("Usage: node lsp-client.js <command> [options]");
-		console.error("Commands: rename, refactor, code-actions, references, move-to-file");
+		console.error("Commands: rename, refactor, code-actions, references, move-to-file, symbols");
 		process.exit(1);
 	}
 
@@ -406,6 +407,19 @@ async function main() {
 					endLine: parseInt(args["end-line"] || args.line),
 					endColumn: parseInt(args["end-column"] || args.column),
 					targetFile: args["target-file"],
+				};
+				break;
+			}
+
+			case "symbols": {
+				if (!args.file) {
+					throw new Error("Missing required arguments: --file");
+				}
+
+				request = {
+					command: "symbols",
+					file: args.file,
+					topLevelOnly: args.flags["top-level-only"] || false,
 				};
 				break;
 			}

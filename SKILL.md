@@ -20,13 +20,15 @@ This skill provides interactive TypeScript code refactoring capabilities using t
 3. **Find All References**: Locate all usages of a symbol across the codebase
 4. **Code Actions/Quick Fixes**: Apply TypeScript quick fixes for errors and warnings
 5. **Move to File**: Move a function, class, or other symbol to a different file, automatically updating all imports
-6. **Other Refactorings**: Access additional LSP-powered refactorings as available
+6. **List Symbols**: List all top-level symbols (functions, classes, interfaces, variables, etc.) in a file with their locations
+7. **Other Refactorings**: Access additional LSP-powered refactorings as available
 
 ## Prerequisites
 
 - Node.js installed
 - TypeScript project with `tsconfig.json`
 - `typescript` package installed (either globally or in project)
+- Commands must be run from the project root directory where `node_modules/typescript` exists (for monorepos, this is typically the workspace root, not individual package directories)
 
 ## Workflow
 
@@ -40,6 +42,8 @@ This skill uses a **daemon-based architecture** for optimal performance:
 - **Per-project**: Each project gets its own daemon (based on working directory)
 
 **You don't need to manually start or stop anything** - just use the commands and the daemon handles itself!
+
+**Working Directory Requirement**: The daemon looks for `tsserver` in `node_modules/typescript/lib/tsserver.js` relative to the current working directory. For monorepos where dependencies are hoisted to the workspace root, you must `cd` to the workspace root before running commands, then use relative paths to files in subdirectories (e.g., `--file "packages/mylib/src/file.ts"`).
 
 ### Rename Symbol Refactoring
 
@@ -277,6 +281,37 @@ When the user wants to move a function, class, or other symbol to a different fi
    - The "Move to file" refactoring must be available at the cursor position
    - If the refactoring is not available, the command will return the list of available refactorings
 
+### List Symbols
+
+When the user wants to see all functions, classes, or other declarations in a file:
+
+1. **Use the LSP symbols operation**:
+   ```bash
+   # List all symbols with nested children (e.g., class methods)
+   node .claude/skills/ts-lsp/lsp-client.js symbols \
+     --file "/path/to/file.ts"
+
+   # List only top-level symbols (no nested children)
+   node .claude/skills/ts-lsp/lsp-client.js symbols \
+     --file "/path/to/file.ts" \
+     --top-level-only
+   ```
+
+2. **Response format**:
+   The command returns a JSON object with a `symbols` array. Each symbol includes:
+   - `name`: The symbol's name
+   - `kind`: The type of symbol (function, class, interface, const, alias, etc.)
+   - `kindModifiers`: Modifiers like "export", "async", etc.
+   - `line`, `column`: Start position (0-based column)
+   - `endLine`, `endColumn`: End position
+   - `children`: Nested symbols (only if `--top-level-only` is not set)
+
+3. **Use cases**:
+   - Getting an overview of a module's API
+   - Finding all exported functions in a file
+   - Locating class methods and properties
+   - Understanding file structure before refactoring
+
 ## Error Handling
 
 - If TypeScript is not installed, inform the user and suggest: `npm install typescript`
@@ -344,6 +379,21 @@ When the user wants to move a function, class, or other symbol to a different fi
    - src/services/handler.ts (import updated)
    - src/api/endpoint.ts (import updated)"
 6. Confirm: "Run `npm run check-types` to verify all imports are correct."
+
+**User**: "What functions are exported from src/api/handler.ts?"
+
+**Skill Response**:
+1. Use LSP symbols command:
+   ```bash
+   node .claude/skills/ts-lsp/lsp-client.js symbols \
+     --file "src/api/handler.ts" \
+     --top-level-only
+   ```
+2. Filter the results for symbols with `kindModifiers` containing "export" and `kind` equal to "function"
+3. Present: "The following functions are exported from src/api/handler.ts:
+   - `handleRequest` (line 15)
+   - `validateInput` (line 45)
+   - `formatResponse` (line 78)"
 
 ## Notes
 

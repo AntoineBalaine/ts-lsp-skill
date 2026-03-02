@@ -207,6 +207,9 @@ class TypeScriptLSPDaemon {
 				case "move-to-file":
 					result = await this.handleMoveToFile(request);
 					break;
+				case "symbols":
+					result = await this.handleSymbols(request);
+					break;
 				default:
 					throw new Error(`Unknown command: ${request.command}`);
 			}
@@ -494,6 +497,61 @@ class TypeScriptLSPDaemon {
 			targetFile: absoluteTargetPath,
 			changes,
 		};
+	}
+
+	/**
+	 * Handle symbols request
+	 *
+	 * Returns the navigation tree for a file, which includes all top-level symbols
+	 * (functions, classes, interfaces, variables, etc.) and their nested children.
+	 */
+	async handleSymbols(request) {
+		const { file, topLevelOnly } = request;
+		const absolutePath = await this.openFile(file);
+
+		const response = await this.sendRequest("navtree", {
+			file: absolutePath,
+		});
+
+		if (!response.body) {
+			return { symbols: [] };
+		}
+
+		const symbols = this.flattenNavTree(response.body, topLevelOnly);
+		return { file: absolutePath, symbols };
+	}
+
+	/**
+	 * Flatten the navigation tree into a list of symbols.
+	 * If topLevelOnly is true, we only return direct children of the module.
+	 */
+	flattenNavTree(node, topLevelOnly, depth = 0) {
+		const symbols = [];
+
+		// The root node is typically the file itself with kind "module"
+		// Its children are the top-level declarations
+		if (node.childItems) {
+			for (const child of node.childItems) {
+				const symbol = {
+					name: child.text,
+					kind: child.kind,
+					kindModifiers: child.kindModifiers || "",
+					line: child.spans?.[0]?.start?.line || 0,
+					column: (child.spans?.[0]?.start?.offset || 1) - 1,
+					endLine: child.spans?.[0]?.end?.line || 0,
+					endColumn: (child.spans?.[0]?.end?.offset || 1) - 1,
+				};
+
+				// Include nested symbols (like class methods) unless topLevelOnly
+				if (!topLevelOnly && child.childItems && child.childItems.length > 0) {
+					symbol.children = this.flattenNavTree(child, false, depth + 1);
+				}
+
+				symbols.push(symbol);
+			}
+		}
+
+		return symbols;
 	}
 
 	/**
